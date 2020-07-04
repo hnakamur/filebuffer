@@ -7,8 +7,10 @@ import (
 )
 
 // WholeFileBuffer is a file buffer whose size is the same as file size.
+//
 // It can read the file partialy in page size units.
-// You need to call Flush after modifying the buffer with PutAt.
+//
+// WholeFileBuffer is not suitable for a very large file.
 type WholeFileBuffer struct {
 	file       ReadWriterAt
 	buf        []byte
@@ -56,6 +58,10 @@ func (b *WholeFileBuffer) fileSize() int64 {
 // Get for the total range beforehand to reduce file I/O
 // system calls.
 func (b *WholeFileBuffer) GetAt(off, length int64) ([]byte, error) {
+	if err := checkOffsetAndLength(b.fileSize(), off, length); err != nil {
+		return nil, err
+	}
+
 	if err := b.read(off, length); err != nil {
 		return nil, err
 	}
@@ -67,9 +73,15 @@ func (b *WholeFileBuffer) GetAt(off, length int64) ([]byte, error) {
 //
 // The caller must call Flush later to write dirty pages
 // to the file.
-func (b *WholeFileBuffer) PutAt(data []byte, off int64) {
+func (b *WholeFileBuffer) PutAt(data []byte, off int64) error {
+	length := int64(len(data))
+	if err := checkOffsetAndLength(b.fileSize(), off, length); err != nil {
+		return err
+	}
+
 	copy(b.buf[off:], data)
-	b.setDirty(off, int64(len(data)))
+	setDirty(b.dirtyPages, b.pageSize, off, length)
+	return nil
 }
 
 // read reads a bytes of the specified length starting at
@@ -78,7 +90,7 @@ func (b *WholeFileBuffer) PutAt(data []byte, off int64) {
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
 func (b *WholeFileBuffer) read(off, length int64) error {
-	for _, pr := range b.pageRangesToRead(off, length) {
+	for _, pr := range pageRangesToRead(b.readPages, b.pageSize, off, length) {
 		off := pr.start * b.pageSize
 		end := pr.end * b.pageSize
 		if end > b.fileSize() {
@@ -96,13 +108,13 @@ func (b *WholeFileBuffer) read(off, length int64) error {
 
 // pageRangesToRead returns a slice of page ranges to read.
 // NOTE: The end of the returned page range is exclusive.
-func (b *WholeFileBuffer) pageRangesToRead(off, length int64) []pageRange {
+func pageRangesToRead(readPages *bitset.BitSet, pageSize, off, length int64) []pageRange {
 	var ranges []pageRange
 	var count int64
-	pr := b.pageRangeForFileRange(off, length)
+	pr := pageRangeForFileRange(pageSize, off, length)
 	page := pr.start
 	for ; page <= pr.end; page++ {
-		if !b.readPages.Test(uint(page)) {
+		if !readPages.Test(uint(page)) {
 			count++
 			continue
 		}
@@ -128,16 +140,16 @@ func (b *WholeFileBuffer) pageRangesToRead(off, length int64) []pageRange {
 //
 // When Flush is called afterward, the dirty pages
 // are written back to the underlying file.
-func (b *WholeFileBuffer) setDirty(off, length int64) {
-	pr := b.pageRangeForFileRange(off, length)
+func setDirty(dirtyPages *bitset.BitSet, pageSize, off, length int64) {
+	pr := pageRangeForFileRange(pageSize, off, length)
 	for page := pr.start; page <= pr.end; page++ {
-		b.dirtyPages.Set(uint(page))
+		dirtyPages.Set(uint(page))
 	}
 }
 
 // Flush writes dirty pages to the file.
 func (b *WholeFileBuffer) Flush() error {
-	for _, r := range b.dirtyPageRanges() {
+	for _, r := range dirtyPageRanges(b.dirtyPages) {
 		off := r.start * b.pageSize
 		end := r.end * b.pageSize
 		if end > b.fileSize() {
@@ -153,15 +165,15 @@ func (b *WholeFileBuffer) Flush() error {
 
 // dirtyPageRanges returns a slice of page ranges for dirty pages.
 // NOTE: The end of the returned page range is exclusive.
-func (b *WholeFileBuffer) dirtyPageRanges() []pageRange {
-	if b.dirtyPages == nil {
+func dirtyPageRanges(dirtyPages *bitset.BitSet) []pageRange {
+	if dirtyPages == nil {
 		return nil
 	}
 
 	var ranges []pageRange
 	var i, count int64
-	for ; i < int64(b.dirtyPages.Len()); i++ {
-		if b.dirtyPages.Test(uint(i)) {
+	for ; i < int64(dirtyPages.Len()); i++ {
+		if dirtyPages.Test(uint(i)) {
 			count++
 			continue
 		}
@@ -185,9 +197,9 @@ func (b *WholeFileBuffer) dirtyPageRanges() []pageRange {
 
 // pageRangeForFileRange returns a page range for a file range.
 // NOTE: The end of the returned page range is inclusive.
-func (b *WholeFileBuffer) pageRangeForFileRange(off, length int64) pageRange {
+func pageRangeForFileRange(pageSize, off, length int64) pageRange {
 	return pageRange{
-		start: off / b.pageSize,
-		end:   (off + length - 1) / b.pageSize,
+		start: off / pageSize,
+		end:   (off + length - 1) / pageSize,
 	}
 }
