@@ -1,4 +1,4 @@
-package wholefilebuffer
+package filebuffer
 
 import (
 	"bytes"

@@ -1,4 +1,4 @@
-module bitbucket.org/hnakamur/wholefilebuffer
+module github.com/hnakamur/filebuffer
 
 go 1.14
 
