@@ -26,6 +26,11 @@ type FileBuffer struct {
 	dirtyPages *bitset.BitSet
 }
 
+type pageRange struct {
+	start int64
+	end   int64
+}
+
 // New creates a new whole file buffer.
 func New(file *os.File, fileSize, pageSize int64) *FileBuffer {
 	pageCount := uint((fileSize + pageSize - 1) / pageSize)
@@ -107,7 +112,7 @@ func (b *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 		n = copy(buf, p)
 		p = p[n:]
 	}
-	setDirty(b.dirtyPages, b.pageSize, off, length)
+	b.setDirty(off, length)
 	return len(p), nil
 }
 
@@ -117,7 +122,7 @@ func (b *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
 func (b *FileBuffer) Preread(off, length int64) error {
-	for _, r := range pageRangesToRead(b.readPages, b.pageSize, off, length) {
+	for _, r := range b.pageRangesToRead(off, length) {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
 		_, err := preadvFull(b.file, iovs, off)
@@ -133,7 +138,7 @@ func (b *FileBuffer) Preread(off, length int64) error {
 
 // Flush writes dirty pages to the file.
 func (b *FileBuffer) Flush() error {
-	for _, r := range dirtyPageRanges(b.dirtyPages) {
+	for _, r := range b.dirtyPageRanges() {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
 		_, err := pwritevFull(b.file, iovs, off)
@@ -167,24 +172,54 @@ func (b *FileBuffer) getBuf(page int64) []byte {
 	return buf
 }
 
+// pageRangesToRead returns a slice of page ranges to read.
+// NOTE: The end of the returned page range is exclusive.
+func (b *FileBuffer) pageRangesToRead(off, length int64) []pageRange {
+	var ranges []pageRange
+	var count int64
+	pr := pageRangeForFileRange(b.pageSize, off, length)
+	page := pr.start
+	for ; page <= pr.end; page++ {
+		if !b.readPages.Test(uint(page)) {
+			count++
+			continue
+		}
+
+		if count > 0 {
+			ranges = append(ranges, pageRange{
+				start: page - count,
+				end:   page,
+			})
+			count = 0
+		}
+	}
+	if count > 0 {
+		ranges = append(ranges, pageRange{
+			start: page - count,
+			end:   page,
+		})
+	}
+	return ranges
+}
+
 // setDirty marks pages for the specified range dirty.
 //
 // When Flush is called afterward, the dirty pages
 // are written back to the underlying file.
-func setDirty(dirtyPages *bitset.BitSet, pageSize, off, length int64) {
-	pr := pageRangeForFileRange(pageSize, off, length)
+func (b *FileBuffer) setDirty(off, length int64) {
+	pr := pageRangeForFileRange(b.pageSize, off, length)
 	for page := pr.start; page <= pr.end; page++ {
-		dirtyPages.Set(uint(page))
+		b.dirtyPages.Set(uint(page))
 	}
 }
 
 // dirtyPageRanges returns a slice of page ranges for dirty pages.
 // NOTE: The end of the returned page range is exclusive.
-func dirtyPageRanges(dirtyPages *bitset.BitSet) []pageRange {
+func (b *FileBuffer) dirtyPageRanges() []pageRange {
 	var ranges []pageRange
 	var i, count int64
-	for ; i < int64(dirtyPages.Len()); i++ {
-		if dirtyPages.Test(uint(i)) {
+	for ; i < int64(b.dirtyPages.Len()); i++ {
+		if b.dirtyPages.Test(uint(i)) {
 			count++
 			continue
 		}
