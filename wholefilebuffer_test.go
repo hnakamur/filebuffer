@@ -14,12 +14,11 @@ import (
 )
 
 type mockFile struct {
-	name string
 	buf  []byte
 	logs []string
 }
 
-func newMockFile(name string, fileSize, pageSize int64) *mockFile {
+func newMockFile(fileSize, pageSize int64) *mockFile {
 	buf := make([]byte, fileSize)
 	pageCount := (fileSize + pageSize - 1) / pageSize
 	for i := int64(0); i < pageCount; i++ {
@@ -32,15 +31,15 @@ func newMockFile(name string, fileSize, pageSize int64) *mockFile {
 			buf[j] = '0' + byte(i)
 		}
 	}
-	return &mockFile{name: name, buf: buf}
+	return &mockFile{buf: buf}
 }
 
 func (f *mockFile) ReadAt(b []byte, off int64) (int, error) {
 	if off < 0 {
-		return 0, &os.PathError{Op: "readat", Path: f.name, Err: errors.New("negative offset")}
+		return 0, errors.New("negative offset")
 	}
 	if off+int64(len(b)) > int64(len(f.buf)) {
-		return 0, &os.PathError{Op: "readat", Path: f.name, Err: errors.New("offset and length out of bounds")}
+		return 0, errors.New("offset and length out of bounds")
 	}
 
 	copy(b, f.buf[off:off+int64(len(b))])
@@ -50,10 +49,10 @@ func (f *mockFile) ReadAt(b []byte, off int64) (int, error) {
 
 func (f *mockFile) WriteAt(b []byte, off int64) (int, error) {
 	if off < 0 {
-		return 0, &os.PathError{Op: "writeat", Path: f.name, Err: errors.New("negative offset")}
+		return 0, errors.New("negative offset")
 	}
 	if off+int64(len(b)) > int64(len(f.buf)) {
-		return 0, &os.PathError{Op: "writeat", Path: f.name, Err: errors.New("offset and length out of bounds")}
+		return 0, errors.New("offset and length out of bounds")
 	}
 
 	copy(f.buf[off:], b)
@@ -65,36 +64,62 @@ func TestWholeFileBufferMockFile(t *testing.T) {
 	const fileSize = 50
 	const pageSize = 8
 
-	file := newMockFile("mockfile", fileSize, pageSize)
+	file := newMockFile(fileSize, pageSize)
 	b := NewWholeFileBuffer(file, fileSize, pageSize)
 
-	if data, err := b.GetAt(7, 2); err != nil {
-		t.Fatal(err)
-	} else if want := []byte("01"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(7, 2), got=%s, want=%s", string(data), string(want))
+	buf := make([]byte, fileSize)
+	data := buf
+	_, err := b.ReadAt(data, -1)
+	if want := "negative offset"; err == nil || err.Error() != want {
+		t.Errorf("unexpected error: got=%v, want=%s", err, want)
 	}
 
-	b.PutAt([]byte("aa"), 1)
-
-	if data, err := b.GetAt(4*pageSize, pageSize); err != nil {
-		t.Fatal(err)
-	} else if want := []byte("44444444"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(4*pageSize, pageSize), got=%s, want=%s", string(data), string(want))
+	data = buf[:2]
+	_, err = b.ReadAt(data, fileSize-1)
+	if want := "offset and length out of bounds"; err == nil || err.Error() != want {
+		t.Errorf("unexpected error: got=%v, want=%s", err, want)
 	}
 
-	if data, err := b.GetAt(4*pageSize-1, fileSize-(4*pageSize-1)); err != nil {
+	data = buf[:2]
+	if _, err := b.ReadAt(data, 7); err != nil {
 		t.Fatal(err)
-	} else if want := []byte("3444444445555555566"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(4*pageSize-1, fileSize-(4*pageSize-1)), got=%s, want=%s", string(data), string(want))
+	} else if got, want := data, []byte("01"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 2), got=%s, want=%s", string(got), string(want))
 	}
 
-	if data, err := b.GetAt(4*pageSize, pageSize); err != nil {
+	if _, err := b.WriteAt([]byte("aa"), 1); err != nil {
 		t.Fatal(err)
-	} else if want := []byte("44444444"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(4*pageSize, pageSize), got=%s, want=%s", string(data), string(want))
 	}
 
-	b.PutAt([]byte("bbb"), fileSize-3)
+	data = buf[:pageSize]
+	if _, err := b.ReadAt(data, 4*pageSize); err != nil {
+		t.Fatal(err)
+	} else if got, want := data, []byte("44444444"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 4*pageSize), got=%s, want=%s", string(got), string(want))
+	}
+
+	data = buf[:fileSize-(4*pageSize-1)]
+	if _, err := b.ReadAt(data, 4*pageSize-1); err != nil {
+		t.Fatal(err)
+	} else if got, want := data, []byte("3444444445555555566"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 4*pageSize-1), got=%s, want=%s", string(got), string(want))
+	}
+
+	data = buf[:pageSize]
+	if _, err := b.ReadAt(data, 4*pageSize); err != nil {
+		t.Fatal(err)
+	} else if got, want := data, []byte("44444444"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 4*pageSize), got=%s, want=%s", string(got), string(want))
+	}
+
+	_, err = b.WriteAt(data, -1)
+	if want := "negative offset"; err == nil || err.Error() != want {
+		t.Errorf("unexpected error: got=%v, want=%s", err, want)
+	}
+
+	if _, err := b.WriteAt([]byte("bbb"), fileSize-3); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := b.Flush(); err != nil {
 		t.Fatal(err)
@@ -134,27 +159,32 @@ func TestWholeFileBufferReadFile(t *testing.T) {
 
 	wBuf := NewWholeFileBuffer(file, fileSize, pageSize)
 
-	want := make([]byte, fileSize)
+	want, err := ioutil.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, fileSize)
+	if _, err := wBuf.ReadAt(got, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("WholeFileBuffer inital content unmatch")
+	}
+
 	if _, err := rnd.Read(want); err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := wBuf.GetAt(0, fileSize); err != nil {
-		t.Fatal(err)
-	}
-	if err := wBuf.PutAt(want, 0); err != nil {
+	if _, err := wBuf.WriteAt(want, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := wBuf.Flush(); err != nil {
 		t.Fatal(err)
 	}
-
-	got, err := ioutil.ReadFile(file.Name())
+	got, err = ioutil.ReadFile(file.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if !bytes.Equal(got, want) {
-		t.Errorf("WholeFileBuffer content unmatch")
+		t.Errorf("WholeFileBuffer modified content unmatch")
 	}
 }

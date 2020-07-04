@@ -11,6 +11,12 @@ import (
 // partialy in page size units.
 //
 // PagedFileBuffer assumes the file size never changes.
+//
+// PagedFileBuffer uses vector I/O (preadv and pwritev)
+// on Linux for reading and writing successive pages in the
+// file.
+//
+// PagedFileBuffer implements ReadWriterAt interface.
 type PagedFileBuffer struct {
 	file       *os.File
 	fileSize   int64
@@ -33,82 +39,84 @@ func NewPagedFileBuffer(file *os.File, fileSize, pageSize int64) *PagedFileBuffe
 	}
 }
 
-// GetAt returns a slice to the partial buffer after reading
-// pages from the underlying file for the specified range
-// if necessary.
+// ReadAt reads len(p) bytes into p starting at offset off
+// in the buffer.
+// It returns the number of bytes read (n == len(p)) and
+// any error encountered.
 //
-// The caller must not modify the content of the returned
-// slice directly.  Use PutAt instead.
+// ReadAt reads necessary pages using Preread method
+// which are not already read.
 //
-// If you are going to call GetAt multiple times to get
+// If you are going to call ReadAt multiple times to get
 // data spanning to multiple pages, you may want to call
-// Read for the total range beforehand to reduce file I/O
+// Preread for the total range beforehand to reduce file I/O
 // system calls.
-func (b *PagedFileBuffer) GetAt(off, length int64) ([]byte, error) {
+//
+// ReadAt implements io.ReaderAt interface.
+func (b *PagedFileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
+	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
-		return nil, err
+		return 0, err
 	}
 
-	if err := b.Read(off, length); err != nil {
-		return nil, err
+	if err := b.Preread(off, length); err != nil {
+		return 0, err
 	}
 
 	r := pageRangeForFileRange(b.pageSize, off, length)
 	offInPage := off % b.pageSize
 	buf := b.getBuf(r.start)
-	if r.start == r.end {
-		return buf[offInPage : offInPage+length], nil
-	}
-
-	data := make([]byte, length)
-	copy(data, buf[offInPage:])
-	dest := data[len(buf[offInPage:]):]
+	n = copy(p, buf[offInPage:])
+	p = p[n:]
 	for page := r.start + 1; page <= r.end; page++ {
 		buf = b.getBuf(page)
-		n := copy(dest, buf)
-		dest = dest[n:]
+		n := copy(p, buf)
+		p = p[n:]
 	}
-	return data, nil
+	return int(length), nil
 }
 
-// PutAt copies data to the file buffer b and marks the
-// corresponding pages dirty.
+// WriteAt writes len(p) bytes from p to the buffer at offset off.
+// It returns the number of bytes written from p (n == len(p))
+// and any error encountered that caused the write to stop early.
 //
 // Pages for the corresponding range will be read first
 // if not already read.
 //
 // The caller must call Flush later to write dirty pages
 // to the file.
-func (b *PagedFileBuffer) PutAt(data []byte, off int64) error {
-	length := int64(len(data))
+//
+// WriteAt implements io.WriterAt interface.
+func (b *PagedFileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
+	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
-		return err
+		return 0, err
 	}
 
-	if err := b.Read(off, length); err != nil {
-		return err
+	if err := b.Preread(off, length); err != nil {
+		return 0, err
 	}
 
 	r := pageRangeForFileRange(b.pageSize, off, length)
 	offInPage := off % b.pageSize
 	buf := b.getBuf(r.start)
-	n := copy(buf[offInPage:], data)
-	data = data[n:]
+	n = copy(buf[offInPage:], p)
+	p = p[n:]
 	for page := r.start + 1; page <= r.end; page++ {
 		buf = b.getBuf(page)
-		n = copy(buf, data)
-		data = data[n:]
+		n = copy(buf, p)
+		p = p[n:]
 	}
 	setDirty(b.dirtyPages, b.pageSize, off, length)
-	return nil
+	return len(p), nil
 }
 
-// Read reads a bytes of the specified length starting at
+// Preread reads a bytes of the specified length starting at
 // offset off data from the underlying file.
 //
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
-func (b *PagedFileBuffer) Read(off, length int64) error {
+func (b *PagedFileBuffer) Preread(off, length int64) error {
 	for _, r := range pageRangesToRead(b.readPages, b.pageSize, off, length) {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
@@ -157,6 +165,54 @@ func (b *PagedFileBuffer) getBuf(page int64) []byte {
 		b.pages[page] = buf
 	}
 	return buf
+}
+
+// setDirty marks pages for the specified range dirty.
+//
+// When Flush is called afterward, the dirty pages
+// are written back to the underlying file.
+func setDirty(dirtyPages *bitset.BitSet, pageSize, off, length int64) {
+	pr := pageRangeForFileRange(pageSize, off, length)
+	for page := pr.start; page <= pr.end; page++ {
+		dirtyPages.Set(uint(page))
+	}
+}
+
+// dirtyPageRanges returns a slice of page ranges for dirty pages.
+// NOTE: The end of the returned page range is exclusive.
+func dirtyPageRanges(dirtyPages *bitset.BitSet) []pageRange {
+	var ranges []pageRange
+	var i, count int64
+	for ; i < int64(dirtyPages.Len()); i++ {
+		if dirtyPages.Test(uint(i)) {
+			count++
+			continue
+		}
+
+		if count > 0 {
+			ranges = append(ranges, pageRange{
+				start: i - count,
+				end:   i,
+			})
+			count = 0
+		}
+	}
+	if count > 0 {
+		ranges = append(ranges, pageRange{
+			start: i - count,
+			end:   i,
+		})
+	}
+	return ranges
+}
+
+// pageRangeForFileRange returns a page range for a file range.
+// NOTE: The end of the returned page range is inclusive.
+func pageRangeForFileRange(pageSize, off, length int64) pageRange {
+	return pageRange{
+		start: off / pageSize,
+		end:   (off + length - 1) / pageSize,
+	}
 }
 
 func checkOffsetAndLength(fileSize, off, length int64) error {

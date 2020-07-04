@@ -41,44 +41,69 @@ func TestPagedFileBuffer(t *testing.T) {
 
 	b := NewPagedFileBuffer(file, fileSize, pageSize)
 
-	if data, err := b.GetAt(7, 2); err != nil {
-		t.Fatal(err)
-	} else if want := []byte("01"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(7, 2), got=%s, want=%s", string(data), string(want))
+	data := buf
+	_, err = b.ReadAt(data, -1)
+	if want := "negative offset"; err == nil || err.Error() != want {
+		t.Errorf("unexpected error: got=%v, want=%s", err, want)
 	}
 
-	b.PutAt([]byte("aa"), 1)
-
-	if data, err := b.GetAt(4*pageSize, pageSize); err != nil {
-		t.Fatal(err)
-	} else if want := []byte("44444444"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(4*pageSize, pageSize), got=%s, want=%s", string(data), string(want))
+	data = buf[:2]
+	_, err = b.ReadAt(data, fileSize-1)
+	if want := "offset and length out of bounds"; err == nil || err.Error() != want {
+		t.Errorf("unexpected error: got=%v, want=%s", err, want)
 	}
 
-	if data, err := b.GetAt(4*pageSize-1, fileSize-(4*pageSize-1)); err != nil {
+	data = buf[:2]
+	if _, err := b.ReadAt(data, 7); err != nil {
 		t.Fatal(err)
-	} else if want := []byte("3444444445555555566"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(4*pageSize-1, fileSize-(4*pageSize-1)), got=%s, want=%s", string(data), string(want))
+	} else if got, want := data, []byte("01"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 2), got=%s, want=%s", string(got), string(want))
 	}
 
-	if data, err := b.GetAt(4*pageSize, pageSize); err != nil {
+	if _, err := b.WriteAt([]byte("aa"), 1); err != nil {
 		t.Fatal(err)
-	} else if want := []byte("44444444"); !bytes.Equal(data, want) {
-		t.Errorf("data unmatch for GetAt(4*pageSize, pageSize), got=%s, want=%s", string(data), string(want))
 	}
 
-	b.PutAt([]byte("bbb"), fileSize-3)
+	data = buf[:pageSize]
+	if _, err := b.ReadAt(data, 4*pageSize); err != nil {
+		t.Fatal(err)
+	} else if got, want := data, []byte("44444444"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 4*pageSize), got=%s, want=%s", string(got), string(want))
+	}
+
+	data = buf[:fileSize-(4*pageSize-1)]
+	if _, err := b.ReadAt(data, 4*pageSize-1); err != nil {
+		t.Fatal(err)
+	} else if got, want := data, []byte("3444444445555555566"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 4*pageSize-1), got=%s, want=%s", string(got), string(want))
+	}
+
+	data = buf[:pageSize]
+	if _, err := b.ReadAt(data, 4*pageSize); err != nil {
+		t.Fatal(err)
+	} else if got, want := data, []byte("44444444"); !bytes.Equal(got, want) {
+		t.Errorf("data unmatch for GetAt(data, 4*pageSize), got=%s, want=%s", string(got), string(want))
+	}
+
+	_, err = b.WriteAt(data, -1)
+	if want := "negative offset"; err == nil || err.Error() != want {
+		t.Errorf("unexpected error: got=%v, want=%s", err, want)
+	}
+
+	if _, err := b.WriteAt([]byte("bbb"), fileSize-3); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := b.Flush(); err != nil {
 		t.Fatal(err)
 	}
 
-	data, err := ioutil.ReadFile(file.Name())
+	gotBytes, err := ioutil.ReadFile(file.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got, want := string(data), "0aa00000111111112222222233333333444444445555555bbb"; got != want {
+	if got, want := string(gotBytes), "0aa00000111111112222222233333333444444445555555bbb"; got != want {
 		t.Errorf("buf unmatch, got=%s, want=%s", got, want)
 	}
 }
@@ -102,27 +127,33 @@ func TestPagedFileBufferOverMaxIov(t *testing.T) {
 
 	pBuf := NewPagedFileBuffer(file, fileSize, pageSize)
 
-	want := make([]byte, fileSize)
+	want, err := ioutil.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, fileSize)
+	if _, err := pBuf.ReadAt(got, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("WholeFileBuffer inital content unmatch")
+	}
+
 	if _, err := rnd.Read(want); err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := pBuf.GetAt(0, fileSize); err != nil {
-		t.Fatal(err)
-	}
-	if err := pBuf.PutAt(want, 0); err != nil {
+	if _, err := pBuf.WriteAt(want, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := pBuf.Flush(); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := ioutil.ReadFile(file.Name())
+	got, err = ioutil.ReadFile(file.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if !bytes.Equal(got, want) {
-		t.Errorf("PagedFileBuffer content unmatch")
+		t.Errorf("PagedFileBuffer modified content unmatch")
 	}
 }

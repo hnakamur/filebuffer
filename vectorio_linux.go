@@ -1,7 +1,6 @@
 package filebuffer
 
 import (
-	"log"
 	"os"
 
 	"github.com/tklauser/go-sysconf"
@@ -21,7 +20,6 @@ func pwritev(file *os.File, iovs [][]byte, offset int64) (n int, err error) {
 		}
 		n0, err := unix.Pwritev(int(file.Fd()), iovs[:count], offset)
 		n += n0
-		log.Printf("after unix.Pwritev, n=%d, n0=%d, err=%v", n, n0, err)
 		if err != nil {
 			return n, err
 		}
@@ -45,7 +43,6 @@ func preadv(file *os.File, iovs [][]byte, offset int64) (n int, err error) {
 		}
 		n0, err := unix.Preadv(int(file.Fd()), iovs[:count], offset)
 		n += n0
-		log.Printf("after unix.Preadv, n=%d, n0=%d, err=%v", n, n0, err)
 		if err != nil || n0 == 0 {
 			return n, err
 		}

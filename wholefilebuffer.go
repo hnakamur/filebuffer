@@ -8,11 +8,14 @@ import (
 
 // WholeFileBuffer is a file buffer whose size is the same as file size.
 //
+// WholeFileBuffer assumes the file size never changes.
+//
 // It can read the file partialy in page size units.
 //
-// WholeFileBuffer assumes the file size never changes.
 // WholeFileBuffer is not suitable for a very large file.
 // Use PagedFileBuffer instead.
+//
+// WholeFileBuffer implements ReadWriterAt interface.
 type WholeFileBuffer struct {
 	file       ReadWriterAt
 	buf        []byte
@@ -48,56 +51,64 @@ func (b *WholeFileBuffer) fileSize() int64 {
 	return int64(len(b.buf))
 }
 
-// GetAt returns a slice to the partial buffer after reading
-// pages from the underlying file for the specified range
-// if necessary.
+// ReadAt reads len(p) bytes into p starting at offset off
+// in the buffer.
+// It returns the number of bytes read (n == len(p)) and
+// any error encountered.
 //
-// The caller must not modify the content of the returned
-// slice directly.  Use PutAt instead.
+// ReadAt reads necessary pages using Preread method
+// which are not already read.
 //
-// If you are going to call GetAt multiple times to get
+// If you are going to call ReadAt multiple times to get
 // data spanning to multiple pages, you may want to call
-// Read for the total range beforehand to reduce file I/O
+// Preread for the total range beforehand to reduce file I/O
 // system calls.
-func (b *WholeFileBuffer) GetAt(off, length int64) ([]byte, error) {
+//
+// ReadAt implements io.ReaderAt interface.
+func (b *WholeFileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
+	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize(), off, length); err != nil {
-		return nil, err
+		return 0, err
 	}
 
-	if err := b.Read(off, length); err != nil {
-		return nil, err
+	if err := b.Preread(off, length); err != nil {
+		return 0, err
 	}
-	return b.buf[off : off+length], nil
+	copy(p, b.buf[off:off+length])
+	return len(p), nil
 }
 
-// PutAt copies data to the file buffer b and marks the
-// corresponding pages dirty.
+// WriteAt writes len(p) bytes from p to the buffer at offset off.
+// It returns the number of bytes written from p (n == len(p))
+// and any error encountered that caused the write to stop early.
 //
 // Pages for the corresponding range will be read first
 // if not already read.
 //
 // The caller must call Flush later to write dirty pages
 // to the file.
-func (b *WholeFileBuffer) PutAt(data []byte, off int64) error {
-	length := int64(len(data))
+//
+// WriteAt implements io.WriterAt interface.
+func (b *WholeFileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
+	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize(), off, length); err != nil {
-		return err
+		return 0, err
 	}
 
-	if err := b.Read(off, length); err != nil {
-		return err
+	if err := b.Preread(off, length); err != nil {
+		return 0, err
 	}
-	copy(b.buf[off:], data)
+	copy(b.buf[off:], p)
 	setDirty(b.dirtyPages, b.pageSize, off, length)
-	return nil
+	return len(p), nil
 }
 
-// Read reads a bytes of the specified length starting at
+// Preread reads a bytes of the specified length starting at
 // offset off data from the underlying file.
 //
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
-func (b *WholeFileBuffer) Read(off, length int64) error {
+func (b *WholeFileBuffer) Preread(off, length int64) error {
 	for _, pr := range pageRangesToRead(b.readPages, b.pageSize, off, length) {
 		off := pr.start * b.pageSize
 		end := pr.end * b.pageSize
@@ -144,17 +155,6 @@ func pageRangesToRead(readPages *bitset.BitSet, pageSize, off, length int64) []p
 	return ranges
 }
 
-// setDirty marks pages for the specified range dirty.
-//
-// When Flush is called afterward, the dirty pages
-// are written back to the underlying file.
-func setDirty(dirtyPages *bitset.BitSet, pageSize, off, length int64) {
-	pr := pageRangeForFileRange(pageSize, off, length)
-	for page := pr.start; page <= pr.end; page++ {
-		dirtyPages.Set(uint(page))
-	}
-}
-
 // Flush writes dirty pages to the file.
 func (b *WholeFileBuffer) Flush() error {
 	for _, r := range dirtyPageRanges(b.dirtyPages) {
@@ -169,45 +169,4 @@ func (b *WholeFileBuffer) Flush() error {
 	}
 	b.dirtyPages.ClearAll()
 	return nil
-}
-
-// dirtyPageRanges returns a slice of page ranges for dirty pages.
-// NOTE: The end of the returned page range is exclusive.
-func dirtyPageRanges(dirtyPages *bitset.BitSet) []pageRange {
-	if dirtyPages == nil {
-		return nil
-	}
-
-	var ranges []pageRange
-	var i, count int64
-	for ; i < int64(dirtyPages.Len()); i++ {
-		if dirtyPages.Test(uint(i)) {
-			count++
-			continue
-		}
-
-		if count > 0 {
-			ranges = append(ranges, pageRange{
-				start: i - count,
-				end:   i,
-			})
-			count = 0
-		}
-	}
-	if count > 0 {
-		ranges = append(ranges, pageRange{
-			start: i - count,
-			end:   i,
-		})
-	}
-	return ranges
-}
-
-// pageRangeForFileRange returns a page range for a file range.
-// NOTE: The end of the returned page range is inclusive.
-func pageRangeForFileRange(pageSize, off, length int64) pageRange {
-	return pageRange{
-		start: off / pageSize,
-		end:   (off + length - 1) / pageSize,
-	}
 }
