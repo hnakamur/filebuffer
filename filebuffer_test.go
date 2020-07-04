@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-func TestPagedFileBuffer(t *testing.T) {
+func TestFileBuffer(t *testing.T) {
 	const fileSize = 50
 	const pageSize = 8
 
-	file, err := ioutil.TempFile("", "pagedfilebuffer-test.dat")
+	file, err := ioutil.TempFile("", "filebuffer-test.dat")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestPagedFileBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := NewPagedFileBuffer(file, fileSize, pageSize)
+	b := New(file, fileSize, pageSize)
 
 	data := buf
 	_, err = b.ReadAt(data, -1)
@@ -108,8 +108,8 @@ func TestPagedFileBuffer(t *testing.T) {
 	}
 }
 
-func TestPagedFileBufferOverMaxIov(t *testing.T) {
-	file, err := ioutil.TempFile("", "pagedfilebuffer-test-over-max-iov.dat")
+func TestFileBufferOverMaxIov(t *testing.T) {
+	file, err := ioutil.TempFile("", "filebuffer-test-over-max-iov.dat")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestPagedFileBufferOverMaxIov(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pBuf := NewPagedFileBuffer(file, fileSize, pageSize)
+	pBuf := New(file, fileSize, pageSize)
 
 	want, err := ioutil.ReadFile(file.Name())
 	if err != nil {

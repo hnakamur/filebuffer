@@ -7,17 +7,17 @@ import (
 	"github.com/willf/bitset"
 )
 
-// PagedFileBuffer is a file buffer which can read the file
+// FileBuffer is a file buffer which can read the file
 // partialy in page size units.
 //
-// PagedFileBuffer assumes the file size never changes.
+// FileBuffer assumes the file size never changes.
 //
-// PagedFileBuffer uses vector I/O (preadv and pwritev)
+// FileBuffer uses vector I/O (preadv and pwritev)
 // on Linux for reading and writing successive pages in the
 // file.
 //
-// PagedFileBuffer implements ReadWriterAt interface.
-type PagedFileBuffer struct {
+// FileBuffer implements ReadWriterAt interface.
+type FileBuffer struct {
 	file       *os.File
 	fileSize   int64
 	pages      map[int64][]byte
@@ -26,10 +26,10 @@ type PagedFileBuffer struct {
 	dirtyPages *bitset.BitSet
 }
 
-// NewPagedFileBuffer creates a new whole file buffer.
-func NewPagedFileBuffer(file *os.File, fileSize, pageSize int64) *PagedFileBuffer {
+// New creates a new whole file buffer.
+func New(file *os.File, fileSize, pageSize int64) *FileBuffer {
 	pageCount := uint((fileSize + pageSize - 1) / pageSize)
-	return &PagedFileBuffer{
+	return &FileBuffer{
 		file:       file,
 		fileSize:   fileSize,
 		pages:      make(map[int64][]byte),
@@ -53,7 +53,7 @@ func NewPagedFileBuffer(file *os.File, fileSize, pageSize int64) *PagedFileBuffe
 // system calls.
 //
 // ReadAt implements io.ReaderAt interface.
-func (b *PagedFileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
+func (b *FileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
 	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
 		return 0, err
@@ -87,7 +87,7 @@ func (b *PagedFileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
 // to the file.
 //
 // WriteAt implements io.WriterAt interface.
-func (b *PagedFileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
+func (b *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
 		return 0, err
@@ -116,7 +116,7 @@ func (b *PagedFileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 //
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
-func (b *PagedFileBuffer) Preread(off, length int64) error {
+func (b *FileBuffer) Preread(off, length int64) error {
 	for _, r := range pageRangesToRead(b.readPages, b.pageSize, off, length) {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
@@ -132,7 +132,7 @@ func (b *PagedFileBuffer) Preread(off, length int64) error {
 }
 
 // Flush writes dirty pages to the file.
-func (b *PagedFileBuffer) Flush() error {
+func (b *FileBuffer) Flush() error {
 	for _, r := range dirtyPageRanges(b.dirtyPages) {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
@@ -145,7 +145,7 @@ func (b *PagedFileBuffer) Flush() error {
 	return nil
 }
 
-func (b *PagedFileBuffer) iovsForPageRange(pr pageRange) [][]byte {
+func (b *FileBuffer) iovsForPageRange(pr pageRange) [][]byte {
 	iovs := make([][]byte, pr.end-pr.start)
 	for i := range iovs {
 		iovs[i] = b.getBuf(pr.start + int64(i))
@@ -153,7 +153,7 @@ func (b *PagedFileBuffer) iovsForPageRange(pr pageRange) [][]byte {
 	return iovs
 }
 
-func (b *PagedFileBuffer) getBuf(page int64) []byte {
+func (b *FileBuffer) getBuf(page int64) []byte {
 	buf := b.pages[page]
 	if buf == nil {
 		off := b.pageSize * page
