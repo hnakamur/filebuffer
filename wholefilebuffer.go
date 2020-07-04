@@ -10,7 +10,9 @@ import (
 //
 // It can read the file partialy in page size units.
 //
+// WholeFileBuffer assumes the file size never changes.
 // WholeFileBuffer is not suitable for a very large file.
+// Use PagedFileBuffer instead.
 type WholeFileBuffer struct {
 	file       ReadWriterAt
 	buf        []byte
@@ -55,14 +57,14 @@ func (b *WholeFileBuffer) fileSize() int64 {
 //
 // If you are going to call GetAt multiple times to get
 // data spanning to multiple pages, you may want to call
-// Get for the total range beforehand to reduce file I/O
+// Read for the total range beforehand to reduce file I/O
 // system calls.
 func (b *WholeFileBuffer) GetAt(off, length int64) ([]byte, error) {
 	if err := checkOffsetAndLength(b.fileSize(), off, length); err != nil {
 		return nil, err
 	}
 
-	if err := b.read(off, length); err != nil {
+	if err := b.Read(off, length); err != nil {
 		return nil, err
 	}
 	return b.buf[off : off+length], nil
@@ -70,6 +72,9 @@ func (b *WholeFileBuffer) GetAt(off, length int64) ([]byte, error) {
 
 // PutAt copies data to the file buffer b and marks the
 // corresponding pages dirty.
+//
+// Pages for the corresponding range will be read first
+// if not already read.
 //
 // The caller must call Flush later to write dirty pages
 // to the file.
@@ -79,17 +84,20 @@ func (b *WholeFileBuffer) PutAt(data []byte, off int64) error {
 		return err
 	}
 
+	if err := b.Read(off, length); err != nil {
+		return err
+	}
 	copy(b.buf[off:], data)
 	setDirty(b.dirtyPages, b.pageSize, off, length)
 	return nil
 }
 
-// read reads a bytes of the specified length starting at
+// Read reads a bytes of the specified length starting at
 // offset off data from the underlying file.
 //
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
-func (b *WholeFileBuffer) read(off, length int64) error {
+func (b *WholeFileBuffer) Read(off, length int64) error {
 	for _, pr := range pageRangesToRead(b.readPages, b.pageSize, off, length) {
 		off := pr.start * b.pageSize
 		end := pr.end * b.pageSize

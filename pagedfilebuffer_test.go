@@ -2,16 +2,43 @@ package filebuffer
 
 import (
 	"bytes"
+	"io"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestPagedFileBuffer(t *testing.T) {
 	const fileSize = 50
 	const pageSize = 8
 
-	file := testSetupFile(t, fileSize, pageSize)
+	file, err := ioutil.TempFile("", "pagedfilebuffer-test.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		file.Close()
+		os.Remove(file.Name())
+	})
+
+	buf := make([]byte, fileSize)
+	pageCount := int64(fileSize+pageSize-1) / pageSize
+	for i := int64(0); i < pageCount; i++ {
+		off := i * pageSize
+		end := (i + 1) * pageSize
+		if end > fileSize {
+			end = fileSize
+		}
+		for j := off; j < end; j++ {
+			buf[j] = '0' + byte(i)
+		}
+	}
+	if _, err := file.WriteAt(buf, 0); err != nil {
+		t.Fatal(err)
+	}
+
 	b := NewPagedFileBuffer(file, fileSize, pageSize)
 
 	if data, err := b.GetAt(7, 2); err != nil {
@@ -56,31 +83,46 @@ func TestPagedFileBuffer(t *testing.T) {
 	}
 }
 
-func testSetupFile(t *testing.T, fileSize, pageSize int64) *os.File {
-	file, err := ioutil.TempFile("", "filebuffer-test.dat")
+func TestPagedFileBufferOverMaxIov(t *testing.T) {
+	file, err := ioutil.TempFile("", "pagedfilebuffer-test-over-max-iov.dat")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		file.Close()
 		os.Remove(file.Name())
 	})
 
-	buf := make([]byte, fileSize)
-	pageCount := (fileSize + pageSize - 1) / pageSize
-	for i := int64(0); i < pageCount; i++ {
-		off := i * pageSize
-		end := (i + 1) * pageSize
-		if end > fileSize {
-			end = fileSize
-		}
-		for j := off; j < end; j++ {
-			buf[j] = '0' + byte(i)
-		}
-	}
-	if _, err := file.WriteAt(buf, 0); err != nil {
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+	const maxIov = 1024
+	const pageSize = 4096
+	const fileSize = maxIov*pageSize + 1
+	if _, err := io.CopyN(file, rnd, fileSize); err != nil {
 		t.Fatal(err)
 	}
 
-	return file
+	pBuf := NewPagedFileBuffer(file, fileSize, pageSize)
+
+	want := make([]byte, fileSize)
+	if _, err := rnd.Read(want); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pBuf.GetAt(0, fileSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := pBuf.PutAt(want, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := pBuf.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ioutil.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(got, want) {
+		t.Errorf("PagedFileBuffer content unmatch")
+	}
 }

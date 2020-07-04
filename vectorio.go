@@ -1,7 +1,6 @@
 package filebuffer
 
 import (
-	"io"
 	"os"
 )
 
@@ -32,7 +31,7 @@ func preadvFull(file *os.File, iovs [][]byte, offset int64) (n int, err error) {
 	for {
 		n, err = preadv(file, iovs, offset)
 		done += n
-		if (err != nil && err != io.EOF) || done >= total {
+		if err != nil || n == 0 || done >= total {
 			break
 		}
 		iovs = iovsAdjust(iovs, n)
@@ -57,6 +56,8 @@ func iovsAdjust(iovs [][]byte, n int) [][]byte {
 	if len(iovs) == 0 {
 		return nil
 	}
-	iovs[0] = iovs[0][n:]
-	return iovs
+	iovs2 := make([][]byte, len(iovs))
+	copy(iovs2, iovs)
+	iovs2[0] = iovs2[0][n:]
+	return iovs2
 }

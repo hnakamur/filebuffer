@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"math/rand"
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 type mockFile struct {
@@ -57,7 +61,7 @@ func (f *mockFile) WriteAt(b []byte, off int64) (int, error) {
 	return len(b), nil
 }
 
-func TestWholeFileBuffer(t *testing.T) {
+func TestWholeFileBufferMockFile(t *testing.T) {
 	const fileSize = 50
 	const pageSize = 8
 
@@ -108,5 +112,49 @@ func TestWholeFileBuffer(t *testing.T) {
 		"WriteAt(off=40,len=10)",
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("logs unmatch, got=%v, want=%v", got, want)
+	}
+}
+
+func TestWholeFileBufferReadFile(t *testing.T) {
+	file, err := ioutil.TempFile("", "wholefilebuffer-test.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Remove(file.Name())
+	})
+
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+	const maxIov = 1024
+	const pageSize = 4096
+	const fileSize = maxIov*pageSize + 1
+	if _, err := io.CopyN(file, rnd, fileSize); err != nil {
+		t.Fatal(err)
+	}
+
+	wBuf := NewWholeFileBuffer(file, fileSize, pageSize)
+
+	want := make([]byte, fileSize)
+	if _, err := rnd.Read(want); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := wBuf.GetAt(0, fileSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := wBuf.PutAt(want, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := wBuf.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ioutil.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(got, want) {
+		t.Errorf("WholeFileBuffer content unmatch")
 	}
 }

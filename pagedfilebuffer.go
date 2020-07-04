@@ -9,6 +9,8 @@ import (
 
 // PagedFileBuffer is a file buffer which can read the file
 // partialy in page size units.
+//
+// PagedFileBuffer assumes the file size never changes.
 type PagedFileBuffer struct {
 	file       *os.File
 	fileSize   int64
@@ -40,14 +42,14 @@ func NewPagedFileBuffer(file *os.File, fileSize, pageSize int64) *PagedFileBuffe
 //
 // If you are going to call GetAt multiple times to get
 // data spanning to multiple pages, you may want to call
-// Get for the total range beforehand to reduce file I/O
+// Read for the total range beforehand to reduce file I/O
 // system calls.
 func (b *PagedFileBuffer) GetAt(off, length int64) ([]byte, error) {
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
 		return nil, err
 	}
 
-	if err := b.read(off, length); err != nil {
+	if err := b.Read(off, length); err != nil {
 		return nil, err
 	}
 
@@ -72,11 +74,18 @@ func (b *PagedFileBuffer) GetAt(off, length int64) ([]byte, error) {
 // PutAt copies data to the file buffer b and marks the
 // corresponding pages dirty.
 //
+// Pages for the corresponding range will be read first
+// if not already read.
+//
 // The caller must call Flush later to write dirty pages
 // to the file.
 func (b *PagedFileBuffer) PutAt(data []byte, off int64) error {
 	length := int64(len(data))
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
+		return err
+	}
+
+	if err := b.Read(off, length); err != nil {
 		return err
 	}
 
@@ -86,20 +95,20 @@ func (b *PagedFileBuffer) PutAt(data []byte, off int64) error {
 	n := copy(buf[offInPage:], data)
 	data = data[n:]
 	for page := r.start + 1; page <= r.end; page++ {
-		buf := b.getBuf(page)
-		n := copy(buf, data)
+		buf = b.getBuf(page)
+		n = copy(buf, data)
 		data = data[n:]
 	}
 	setDirty(b.dirtyPages, b.pageSize, off, length)
 	return nil
 }
 
-// read reads a bytes of the specified length starting at
+// Read reads a bytes of the specified length starting at
 // offset off data from the underlying file.
 //
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
-func (b *PagedFileBuffer) read(off, length int64) error {
+func (b *PagedFileBuffer) Read(off, length int64) error {
 	for _, r := range pageRangesToRead(b.readPages, b.pageSize, off, length) {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
