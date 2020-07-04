@@ -5,4 +5,7 @@ filebuffer is a Go module which provides a buffer implmentation for random acces
 of fixed size files with io.ReadAt and io.WriteAt interfaces.
 
 ## License
-MIT
+[MIT](LICENSE)
+
+## Credits
+[CREDITS](CREDITS)
