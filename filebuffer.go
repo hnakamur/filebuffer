@@ -3,6 +3,7 @@ package filebuffer
 import (
 	"errors"
 	"os"
+	"sync"
 
 	"github.com/willf/bitset"
 )
@@ -24,6 +25,7 @@ type FileBuffer struct {
 	pageSize   int64
 	readPages  *bitset.BitSet
 	dirtyPages *bitset.BitSet
+	mu         sync.Mutex
 }
 
 type pageRange struct {
@@ -59,12 +61,15 @@ func New(file *os.File, fileSize, pageSize int64) *FileBuffer {
 //
 // ReadAt implements io.ReaderAt interface.
 func (b *FileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
 		return 0, err
 	}
 
-	if err := b.Preread(off, length); err != nil {
+	if err := b.preread(off, length); err != nil {
 		return 0, err
 	}
 
@@ -93,12 +98,15 @@ func (b *FileBuffer) ReadAt(p []byte, off int64) (n int, err error) {
 //
 // WriteAt implements io.WriterAt interface.
 func (b *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	length := int64(len(p))
 	if err := checkOffsetAndLength(b.fileSize, off, length); err != nil {
 		return 0, err
 	}
 
-	if err := b.Preread(off, length); err != nil {
+	if err := b.preread(off, length); err != nil {
 		return 0, err
 	}
 
@@ -122,6 +130,13 @@ func (b *FileBuffer) WriteAt(p []byte, off int64) (n int, err error) {
 // It reads the file in page size units and skips pages
 // which were already read and kept in the buffer.
 func (b *FileBuffer) Preread(off, length int64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.preread(off, length)
+}
+
+func (b *FileBuffer) preread(off, length int64) error {
 	for _, r := range b.pageRangesToRead(off, length) {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
@@ -138,6 +153,9 @@ func (b *FileBuffer) Preread(off, length int64) error {
 
 // Flush writes dirty pages to the file.
 func (b *FileBuffer) Flush() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	for _, r := range b.dirtyPageRanges() {
 		off := r.start * b.pageSize
 		iovs := b.iovsForPageRange(r)
