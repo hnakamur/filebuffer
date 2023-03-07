@@ -1,9 +1,9 @@
+github.com/bits-and-blooms/bitset v1.5.0 h1:NpE8frKRLGHIcEzkR+gZhiioW1+WbYV6fKwD6ZIpQT8=
+github.com/bits-and-blooms/bitset v1.5.0/go.mod h1:gIdJ4wp64HaoK2YrL1Q5/N7Y16edYb8uY+O0FJTyyDA=
 github.com/tklauser/go-sysconf v0.0.0-20200513113950-67a71062da8a h1:jeAzWylWYtgXQ5h9lmsKe17g53D01FQXt5Eqp3iiknc=
 github.com/tklauser/go-sysconf v0.0.0-20200513113950-67a71062da8a/go.mod h1:tm+kIOGK/2Uiq2HMIWPO8sYKXcvFsZxamsEjebitk7o=
 github.com/tklauser/numcpus v0.0.0-20200513113108-b180d8d09e7f h1:3tXMZR77OcDtqsBRpkODqLSo+aNI929wDmkTNGv4rDQ=
 github.com/tklauser/numcpus v0.0.0-20200513113108-b180d8d09e7f/go.mod h1:+J9GmiWKLPVI5jbBcROd0PIn8z0zs1+JdMFKAKmztRo=
-github.com/willf/bitset v1.1.10 h1:NotGKqX0KwQ72NUzqrjZq5ipPNDQex9lo3WpaS8L2sc=
-github.com/willf/bitset v1.1.10/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
 golang.org/x/sys v0.0.0-20200513112337-417ce2331b5c/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20200625212154-ddb9806d33ae h1:Ih9Yo4hSPImZOpfGuA4bR/ORKTAbhZo2AbWNRCnevdo=
 golang.org/x/sys v0.0.0-20200625212154-ddb9806d33ae/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=

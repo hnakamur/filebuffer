@@ -5,7 +5,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/willf/bitset"
+	"github.com/bits-and-blooms/bitset"
 )
 
 // FileBuffer is a file buffer which can read the file
